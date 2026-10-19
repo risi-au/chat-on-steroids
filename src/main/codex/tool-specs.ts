@@ -35,20 +35,17 @@ export const WINDOWS_SHELL_GUIDANCE = `Windows shell notes:
 - \`Start-Process\` for a background helper or service: add \`-WindowStyle Hidden\` unless the user asked for a visible window. Visible windows are for interactive tools the user needs to see or control.`;
 
 /**
- * Said on the tool the launch goes through, because `tools/list` is re-sent every turn while the
- * session instructions are read once. On 2026-09-02 a prime testing its game could not get a
- * foreground reading out of the browser window it controlled, and instead of reusing that one
- * window it launched a fresh debug instance on a new port and profile for every retry — five
- * browsers, each one resident, and a CPU running hot for a benchmark it never got. The rule is
- * one of restraint rather than prohibition: a browser it actually uses is fine, a replacement
- * per attempt is not.
+ * Keep MCP tool metadata about what the tool does, not about how the model
+ * should behave elsewhere. On 2026-10-19 ChatGPT's consent reviewer flagged
+ * browser/resource-use instructions in this description as a suspicious
+ * instruction, blocking unrelated project-reporting calls.
+ *
+ * Browser reuse tips belong in user-facing documentation, not the repeatedly
+ * submitted tools/list schema that a consent classifier has to inspect.
  */
-export const BROWSER_LAUNCH_GUIDANCE =
-  'Browsers: do not spawn a new browser, profile or debug port per attempt — each stays resident and heats the CPU. Keep to one or two windows you actually use and reuse the one already open.';
-
 export const EXEC_COMMAND_DESCRIPTION = IS_WINDOWS
-  ? `Runs a command and returns output or a session ID. Use write_stdin for progress, input, or retained output. Background results also arrive on later responses.\n\n${WINDOWS_SHELL_GUIDANCE}\n\n${BROWSER_LAUNCH_GUIDANCE}`
-  : `Runs a command and returns output or a session ID. Use write_stdin for progress, input, or retained output. Background results also arrive on later responses.\n\n${BROWSER_LAUNCH_GUIDANCE}`;
+  ? `Runs a command and returns output or a session ID. Use write_stdin for progress, input, or retained output. Background results also arrive on later responses.\n\n${WINDOWS_SHELL_GUIDANCE}`
+  : 'Runs a command and returns output or a session ID. Use write_stdin for progress, input, or retained output. Background results also arrive on later responses.';
 
 /**
  * Codex's text is 'Shell command to execute.'; two measured additions.

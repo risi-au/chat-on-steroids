@@ -7016,6 +7016,13 @@ const approvalWaitDeps: ApprovalWaitDeps = {
   record: (sessionId, progressId, text, anchor) => recordProgress(sessionId, progressId, text, anchor),
   notify: noticeApprovalWaiting,
   log: logInfo,
+  autoApproveWorkerCard: async sessionId => {
+    if (getConfig().multiAgent.autoApproveWorkerCoreCards !== true) return false;
+    // The stored origin is assigned by the CoS worker broker, not supplied by a
+    // page, card label or Herdr command text. Ordinary and prime chats stay manual.
+    const summary = await getSession(sessionId);
+    return summary?.origin?.kind === 'worker';
+  },
   // The session list's `approval`; a catalog-only push, since no transcript changed.
   changed: () => notifyChanged()
 };

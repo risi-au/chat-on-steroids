@@ -374,6 +374,12 @@ export interface MultiAgentSettings {
   globalMaxWorkers?: number;
   /** Permit self-contained calls when browser evidence cannot identify their conversation. */
   allowUnattributedCalls: boolean;
+  /**
+   * Explicit opt-in: answer ChatGPT's Core tool consent cards for CoS-owned
+   * workers using the same card-ID relay as the app's Allow once button.
+   * Does not apply to primes, arbitrary chats, other plugins, or disabled cards.
+   */
+  autoApproveWorkerCoreCards?: boolean;
   /** Default-deny local tools to exact trusted conversations. */
   strictChatAllowlist?: boolean;
   /**

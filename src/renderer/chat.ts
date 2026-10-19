@@ -6653,6 +6653,7 @@ export function chatSettingsPatch(current: Config): {
       maxWorkers: number('maWorkers', current.multiAgent.maxWorkers, 1, 8),
       globalMaxWorkers: number('globalMaWorkers', current.multiAgent.globalMaxWorkers ?? 0, 0, 64),
       allowUnattributedCalls: $<HTMLInputElement>('allowUnattributedCalls').checked,
+      autoApproveWorkerCoreCards: $<HTMLInputElement>('autoApproveWorkerCoreCards').checked,
       strictChatAllowlist: $<HTMLInputElement>('strictChatAllowlist').checked,
       recoverAgentTabs: $<HTMLInputElement>('recoverAgentTabs').checked,
       waitForSubAgents: $<HTMLInputElement>('waitForSubAgents').checked,
@@ -7059,6 +7060,7 @@ const CHAT_INPUTS = [
   'autoCompactTokens',
   'maWorkers', 'globalMaWorkers',
   'allowUnattributedCalls',
+  'autoApproveWorkerCoreCards',
   'strictChatAllowlist',
   'recoverAgentTabs',
   'waitForSubAgents',
@@ -7153,6 +7155,11 @@ export function chatApply(state: AppState, previous?: Config): void {
     $<HTMLInputElement>('allowUnattributedCalls'),
     config.multiAgent.allowUnattributedCalls,
     previous?.multiAgent.allowUnattributedCalls
+  );
+  applyChatChecked(
+    $<HTMLInputElement>('autoApproveWorkerCoreCards'),
+    config.multiAgent.autoApproveWorkerCoreCards === true,
+    previous?.multiAgent.autoApproveWorkerCoreCards
   );
   applyChatChecked(
     $<HTMLInputElement>('strictChatAllowlist'),

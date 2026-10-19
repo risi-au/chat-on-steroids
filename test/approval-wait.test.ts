@@ -3,7 +3,7 @@ import { JSDOM } from 'jsdom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   APPROVAL_ANSWER_MS, APPROVAL_FRESH_MS, APPROVAL_NOTICE_GRACE_MS, approvalAnswerFor, approvalCardView, approvalCardWaiting, approvalWaitingChats, noteApprovalCard,
-  requestApprovalAnswer, resetApprovalWaits, settleApprovalAnswer, type ApprovalWaitDeps
+  isCoreApprovalCard, requestApprovalAnswer, resetApprovalWaits, settleApprovalAnswer, type ApprovalWaitDeps
 } from '../src/main/approval-wait.js';
 import { APPROVAL_ANSWERED_TEXT, APPROVAL_WAITING_TEXT } from '../src/shared/approval-wait.js';
 
@@ -157,6 +157,52 @@ describe('answering the card from the app', () => {
     expect(second.ok).toBe(true);
     expect(approvalAnswerFor('chat', 1_300 + APPROVAL_ANSWER_MS)).toBeNull();
     expect(approvalCardView('chat', 1_300 + APPROVAL_ANSWER_MS)?.answer).toMatchObject({ choice: 'deny', outcome: 'expired' });
+  });
+});
+
+describe('opt-in native Core worker approvals', () => {
+  beforeEach(() => resetApprovalWaits());
+  const coreCard = (id = 'core-card-1') => ({
+    id, lines: ['Chat On Steroids Core', 'Allow ChatGPT to use Chat On Steroids Core?',
+      'Runs a local workspace command.', 'Suspicious Instruction', 'Sharing data includes: PII owner identifier'],
+    allow: true
+  });
+  const deps = (authorized: boolean): ApprovalWaitDeps => ({
+    record: async () => ({ seq: 1, time: Date.now() }),
+    notify: () => undefined,
+    log: () => undefined,
+    autoApproveWorkerCard: async () => authorized
+  });
+
+  it('uses the native card-specific Allow once relay for an authorized worker, including warning text', async () => {
+    const now = Date.now();
+    await noteApprovalCard('worker-chat', true, 'worker-session', deps(true), now, coreCard());
+    expect(approvalAnswerFor('worker-chat')?.choice).toBe('allow');
+    expect(approvalAnswerFor('worker-chat')?.cardId).toBe('core-card-1');
+  });
+  it('does not auto-approve a Core card in a non-worker or when opt-in is off', async () => {
+    await noteApprovalCard('prime-chat', true, 'prime-session', deps(false), Date.now(), coreCard());
+    expect(approvalAnswerFor('prime-chat')).toBeNull();
+  });
+  it('does not approve other plugins or a disabled Core permission button', async () => {
+    const gmail = { id: 'gmail-card', lines: ['Gmail', 'Allow ChatGPT to use Gmail?', 'Send email'], allow: true };
+    expect(isCoreApprovalCard(gmail)).toBe(false);
+    expect(isCoreApprovalCard({ ...coreCard(), allow: false })).toBe(false);
+    const now = Date.now();
+    await noteApprovalCard('other-plugin', true, 'worker-session', deps(true), now, gmail);
+    expect(approvalAnswerFor('other-plugin')).toBeNull();
+  });
+  it('does not reapprove a completed or manually denied card, but can approve the next distinct card', async () => {
+    const sharedDeps = deps(true);
+    const now = Date.now();
+    await noteApprovalCard('worker-chat', true, 'worker-session', sharedDeps, now, coreCard());
+    const first = approvalAnswerFor('worker-chat');
+    expect(first).not.toBeNull();
+    expect(settleApprovalAnswer('worker-chat', first!.token, 'clicked')).toBe(true);
+    await noteApprovalCard('worker-chat', true, 'worker-session', sharedDeps, now + 10, coreCard());
+    expect(approvalAnswerFor('worker-chat')).toBeNull();
+    await noteApprovalCard('worker-chat', true, 'worker-session', sharedDeps, now + 20, coreCard('core-card-2'));
+    expect(approvalAnswerFor('worker-chat')?.cardId).toBe('core-card-2');
   });
 });
 

@@ -1058,6 +1058,14 @@
 
                   <label class="setting">
                     <span class="setting-text">
+                      <b>Automatically allow Core tools for sub-agents</b>
+                      <em>For workers started by Chat On Steroids, automatically answer ChatGPT's Core tool permission cards with Allow once. Uses the app's card-specific approval relay; only this connector and recorded workers qualify. This also allows cards carrying ChatGPT warning or sensitive-data notices. Off by default, and it cannot verify Herdr approval of individual commands.</em>
+                    </span>
+                    <input id="autoApproveWorkerCoreCards" type="checkbox" />
+                  </label>
+
+                  <label class="setting">
+                    <span class="setting-text">
                       <b>Trust only selected chats</b>
                       <em>Only chats you trust can use this computer's tools. Existing chats start untrusted; hover a chat in the sidebar and choose Trust (✓). Workers and resumed chats follow the chat they came from. Calls the app can't link to a chat are refused.</em>
                     </span>

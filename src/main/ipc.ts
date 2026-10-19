@@ -277,6 +277,7 @@ const settingsPatch = z.object({
     maxWorkers: z.number().int().min(1).max(8),
     globalMaxWorkers: z.number().int().min(0).max(64).optional(),
     allowUnattributedCalls: z.boolean(),
+    autoApproveWorkerCoreCards: z.boolean().optional(),
     strictChatAllowlist: z.boolean().optional(),
     recoverAgentTabs: z.boolean(),
     waitForSubAgents: z.boolean().optional(),
@@ -484,6 +485,11 @@ function mergeSettings(current: Config, base: SettingsSnapshot, wanted: Settings
         current.multiAgent.allowUnattributedCalls,
         base.multiAgent.allowUnattributedCalls,
         wanted.multiAgent.allowUnattributedCalls
+      ),
+      autoApproveWorkerCoreCards: pick(
+        current.multiAgent.autoApproveWorkerCoreCards ?? false,
+        base.multiAgent.autoApproveWorkerCoreCards ?? false,
+        wanted.multiAgent.autoApproveWorkerCoreCards ?? false
       ),
       strictChatAllowlist: pick(
         current.multiAgent.strictChatAllowlist ?? false,

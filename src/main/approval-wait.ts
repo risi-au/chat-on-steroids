@@ -39,6 +39,16 @@ export interface ApprovalWaitDeps {
   log(message: string): void;
   /** A chat started or stopped waiting, so the session list's `approval` changed. */
   changed?(): void;
+  /** Optional, explicitly configured native auto-approval for a proven worker. */
+  autoApproveWorkerCard?(sessionId: string, card: ApprovalCardFacts): Promise<boolean>;
+}
+
+/** Refuse non-Core cards: their consent belongs to the other plugin. */
+export function isCoreApprovalCard(card: ApprovalCardFacts): boolean {
+  if (!card.allow || card.lines.length < 2) return false;
+  const app = card.lines[0]?.trim();
+  if (!app || !/^Chat On Steroids Core(?: \([A-Za-z0-9 _-]{1,40}\))?$/.test(app)) return false;
+  return card.lines.some(line => /^Allow ChatGPT to use Chat On Steroids Core(?: \([A-Za-z0-9 _-]{1,40}\))?\?$/.test(line.trim()));
 }
 
 interface Wait {
@@ -129,6 +139,18 @@ export async function noteApprovalCard(
   if (wait.sessionId && !wait.noticed && now - wait.since >= APPROVAL_NOTICE_GRACE_MS) {
     wait.noticed = true;
     try { deps.notify(wait.sessionId); } catch { /* The row still says it. */ }
+  }
+  // Native relay, not a synthetic browser click: the worker page checks that
+  // this exact card is still present before clicking Allow once. A revoked or
+  // replaced card cannot inherit the earlier answer.
+  if (card && wait.sessionId && wait.answer?.cardId !== card.id &&
+      isCoreApprovalCard(card) && deps.autoApproveWorkerCard) {
+    let enabled = false;
+    try { enabled = await deps.autoApproveWorkerCard(wait.sessionId, card); } catch { /* stay waiting */ }
+    if (enabled) {
+      const result = requestApprovalAnswer(conversationId, card.id, 'allow');
+      if (result.ok) deps.log(`approval card: auto-allowed Core request for recorded worker ${conversationId}`);
+    }
   }
 }
 
