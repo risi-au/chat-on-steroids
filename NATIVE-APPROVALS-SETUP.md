@@ -41,3 +41,37 @@ This mode cannot independently prove a Herdr instruction is safe. It relies on
 CoS's recorded worker origin and your explicit one-time setting. It may also
 allow warned Core actions; ordinary/prime chats and non-Core plugins are not
 automatically allowed.
+
+## Merged onto upstream 2.1.44 (2026-10-21)
+
+Upstream `origin/main` (`05926b21`, release 2.1.44) was merged into local `main`
+(`c0109758`) with both native-approval commits intact. Only `approval-wait.ts`
+and `approval-wait.test.ts` conflicted: the merged `ApprovalWaitDeps` keeps
+upstream's `previous()` recovery row and the local `autoApproveWorkerCard()`
+relay, and `isCoreApprovalCard()` stays next to them. Two upstream checks newly
+covered the local setting: `feature-parity` pins the default `multiAgent` shape
+(now including `autoApproveWorkerCoreCards: false`) and the 2.1.44 i18n test
+requires every static label in all catalogs, so the setting's label and help
+text were translated into the twelve locales. Its help text says "this plugin"
+instead of "this connector", as 2.1.44 requires.
+
+Verification: `npm run typecheck` clean; `npm test` 9,687 passed / 16 failed,
+where fifteen failures reproduce identically on untouched `origin/main`
+(`app-proxy` 1, `skill-library` 6, `codex-plugin-snapshot` 8 — they read this
+machine's real Codex/skill folders) and `mcp.test.ts > answers usage without the
+identity notice` passes alone (189/189) and only trips under full-suite load.
+`npm run dist:dir:linux:x64` assembled 2.1.44; the asar reports 2.1.44 and
+contains `autoApproveWorkerCoreCards` and the `auto-allowed Core request` relay.
+
+Handoff: `switch-to-native-approvals.sh` now reads the expected version from
+`package.json` instead of hardcoding 2.1.42. It ran through a transient
+systemd unit once the worker showed no running tool calls: 2.1.42 exited, the
+old staged tree moved to `release/linux-unpacked-2.1.42-native-bak`, 2.1.44
+started as pid 2562575, `control-api/endpoint.json` reports 2.1.44. Saved config
+kept every value; only the new upstream `ui.rotateStopFallback` default and
+`ui.lastSeenVersion` changed, and `multiAgent.autoApproveWorkerCoreCards` stays
+true. The bridge is paired with extension 2.1.44. Auto-connect is off in this
+config, so the fresh process starts disconnected until Connect is pressed. The
+official install in `~/.local/opt/Chat On Steroids/` is untouched and remains
+the rollback. The remote refused the push (`403`, no write access to
+`totec448-spec/chat-on-steroids`), so these commits exist only locally.
