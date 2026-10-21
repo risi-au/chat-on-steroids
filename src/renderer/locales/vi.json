@@ -328,6 +328,8 @@
   "Saved when you leave the editor. There is no stop response here - the app refuses one and asks again.": "Tự lưu khi bạn rời trình chỉnh sửa. Ở đây không có phản hồi dừng - ứng dụng từ chối và hỏi lại.",
   "Workers & recovery": "Worker & khôi phục",
   "Sub-agent workers": "Worker tác nhân phụ",
+  "Automatically allow Core tools for sub-agents": "Tự động cho phép công cụ Core cho tác nhân phụ",
+  "For workers started by Chat On Steroids, automatically answer ChatGPT's Core tool permission cards with Allow once. Uses the app's card-specific approval relay; only this plugin and recorded workers qualify. This also allows cards carrying ChatGPT warning or sensitive-data notices. Off by default, and it cannot verify Herdr approval of individual commands.": "Với worker do Chat On Steroids khởi chạy, tự động trả lời thẻ cấp quyền công cụ Core của ChatGPT bằng «Cho phép một lần». Dùng cơ chế chuyển tiếp phê duyệt theo từng thẻ của ứng dụng; chỉ plugin này và worker đã ghi nhận mới đủ điều kiện. Việc này cũng cho phép thẻ có cảnh báo hoặc thông báo dữ liệu nhạy cảm của ChatGPT. Mặc định tắt, và không thể xác minh phê duyệt Herdr cho từng lệnh.",
   "max": "tối đa",
   "Workers across all chats": "Worker trên tất cả cuộc trò chuyện",
   "The most workers that may run at once over all your chats together. 0 means no extra limit; each chat still keeps the limit above.": "Số worker tối đa có thể chạy cùng lúc trên toàn bộ các cuộc trò chuyện. 0 nghĩa là không có giới hạn bổ sung; mỗi cuộc trò chuyện vẫn giữ giới hạn phía trên.",

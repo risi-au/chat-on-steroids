@@ -350,6 +350,8 @@
   "Saved when you leave the editor. There is no stop response here - the app refuses one and asks again.": "Сохраняется при выходе из редактора. Здесь нет ответа для остановки — приложение отклонит его и запросит снова.",
   "Workers & recovery": "Воркеры и восстановление",
   "Sub-agent workers": "Субагенты",
+  "Automatically allow Core tools for sub-agents": "Автоматически разрешать инструменты Core для субагентов",
+  "For workers started by Chat On Steroids, automatically answer ChatGPT's Core tool permission cards with Allow once. Uses the app's card-specific approval relay; only this plugin and recorded workers qualify. This also allows cards carrying ChatGPT warning or sensitive-data notices. Off by default, and it cannot verify Herdr approval of individual commands.": "Для воркеров, запущенных Chat On Steroids, автоматически отвечает «Разрешить один раз» на карточки разрешений инструментов Core в ChatGPT. Использует карточный релей подтверждений приложения; подходят только этот плагин и записанные воркеры. Так разрешаются и карточки с предупреждениями ChatGPT или пометками о конфиденциальных данных. По умолчанию выключено, и подтверждение Herdr для отдельных команд проверить нельзя.",
   "max": "max",
   "Workers across all chats": "Воркеры во всех чатах",
   "The most workers that may run at once over all your chats together. 0 means no extra limit; each chat still keeps the limit above.": "Максимальное число воркеров, которые могут одновременно работать во всех ваших чатах. 0 означает отсутствие дополнительного лимита; для каждого чата по-прежнему действует лимит выше.",

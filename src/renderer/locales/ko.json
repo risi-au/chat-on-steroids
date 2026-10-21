@@ -324,6 +324,8 @@
   "Saved when you leave the editor. There is no stop response here - the app refuses one and asks again.": "편집기를 나가면 저장됩니다. 여기에는 종료 응답이 없습니다. 앱이 종료 응답을 거부하고 다시 요청합니다.",
   "Workers & recovery": "워커 및 복구",
   "Sub-agent workers": "서브에이전트 워커",
+  "Automatically allow Core tools for sub-agents": "하위 에이전트의 Core 도구 자동 허용",
+  "For workers started by Chat On Steroids, automatically answer ChatGPT's Core tool permission cards with Allow once. Uses the app's card-specific approval relay; only this plugin and recorded workers qualify. This also allows cards carrying ChatGPT warning or sensitive-data notices. Off by default, and it cannot verify Herdr approval of individual commands.": "Chat On Steroids가 시작한 워커의 경우 ChatGPT의 Core 도구 권한 카드에 '한 번 허용'으로 자동 응답합니다. 앱의 카드별 승인 릴레이를 사용하며, 이 플러그인과 기록된 워커만 해당됩니다. ChatGPT 경고나 민감한 데이터 안내가 있는 카드도 허용됩니다. 기본값은 꺼짐이며, 개별 명령에 대한 Herdr 승인은 확인할 수 없습니다.",
   "max": "최대",
   "Workers across all chats": "모든 채팅의 워커",
   "The most workers that may run at once over all your chats together. 0 means no extra limit; each chat still keeps the limit above.": "모든 채팅을 합쳐 동시에 실행할 수 있는 워커의 최대 수입니다. 0은 추가 제한이 없음을 뜻하며, 각 채팅에는 위의 제한이 계속 적용됩니다.",

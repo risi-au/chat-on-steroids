@@ -330,6 +330,8 @@
   "Saved when you leave the editor. There is no stop response here - the app refuses one and asks again.": "Será salvo quando você sair do editor. Este prompt não tem uma resposta de parada: o aplicativo rejeita essa resposta e pede outra.",
   "Workers & recovery": "Workers e recuperação",
   "Sub-agent workers": "Workers dos subagentes",
+  "Automatically allow Core tools for sub-agents": "Permitir automaticamente ferramentas Core para subagentes",
+  "For workers started by Chat On Steroids, automatically answer ChatGPT's Core tool permission cards with Allow once. Uses the app's card-specific approval relay; only this plugin and recorded workers qualify. This also allows cards carrying ChatGPT warning or sensitive-data notices. Off by default, and it cannot verify Herdr approval of individual commands.": "Para workers iniciados pelo Chat On Steroids, responde automaticamente com «Permitir uma vez» aos cartões de permissão de ferramentas Core do ChatGPT. Usa o relé de aprovação específico por cartão do app; apenas este plugin e workers registrados se qualificam. Isso também permite cartões com avisos de alerta ou de dados sensíveis do ChatGPT. Desativado por padrão, e não consegue verificar a aprovação do Herdr de comandos individuais.",
   "max": "máx.",
   "Workers across all chats": "Workers em todos os chats",
   "The most workers that may run at once over all your chats together. 0 means no extra limit; each chat still keeps the limit above.": "O máximo de workers que podem executar ao mesmo tempo em todos os seus chats. 0 significa sem limite extra; cada chat continua com o limite acima.",
