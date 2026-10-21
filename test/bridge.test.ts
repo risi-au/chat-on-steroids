@@ -49,6 +49,7 @@ vi.mock('electron', () => ({
 const { safeStorage } = await import('electron');
 
 const { defaultConfig, getConfig, initConfigPath, saveConfig } = await import('../src/main/config.js');
+const { queueWorkerArchives, resetWorkerArchiveForTests } = await import('../src/main/worker-archive.js');
 const { initSecretsPath, resetSecretsCacheForTests, setSecret } = await import('../src/main/secrets.js');
 const {
   bridgePort,
@@ -85,6 +86,7 @@ const {
   WORKER_SENDING_GRACE_MS,
   WORKER_REDEEM_MS,
   BROWSER_RECOVERY_COOLDOWN_MS,
+  NAVIGATION_RECOVERY_COOLDOWN_MS,
   DEFAULT_PORTS,
   revealChatInBrowser,
   followChatInBackground,
@@ -3736,6 +3738,31 @@ describe('automatic compaction', () => {
     }
   });
 
+  // #1643: the page tries again by itself once its helper answers, before the app's next pickup.
+  it('asks again, not held, when the source page starts a new attempt on its own', async () => {
+    vi.useFakeTimers();
+    try {
+      await pair();
+      const conversationId = 'a1a1a1a1-0000-4000-8000-00000000ac10';
+      await request('POST', '/events', {
+        body: { conversationId, events: [{ kind: 'user_message', time: Date.now(), text: 'a chat whose helper came back', messageId: 'm-auto-helper' }] }
+      });
+      const filed = await request('POST', '/compact', { body: { conversationId, ticket: true, automatic: true } });
+      const token = filed.body.token as string;
+      const sessionId = filed.body.sessionId as string;
+      const phase = async () => ((await sessionControlsFor(sessionId)).recovery ?? []).map(countdown => countdown.phase);
+      await sweepStaleSwarm(Date.now());
+      await request('POST', '/compact', { body: { conversationId, token, sourceDeferred: true, sourceError: 'ChatGPT has not confirmed receiving the latest tool results.' } });
+      expect(await phase()).toEqual(['held']);
+
+      const again = await request('POST', '/compact', { body: { conversationId, ticket: true, automatic: true } });
+      expect(again.body.token).toBe(token);
+      expect(await phase()).toEqual(['asking']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('takes no deferral reason for a manual Compact & Resume', async () => {
     await pair();
     const conversationId = 'a1a1a1a1-0000-4000-8000-00000000ac0f';
@@ -5634,6 +5661,34 @@ describe('delivering a bootstrap', () => {
     expect(replay.id).toBe(id);
     expect(opened).toHaveLength(1);
     expect(Date.now() - createdAt).toBeLessThan(30_000);
+  });
+
+  it('unarchives a worker chat the app archived before it types the wake into it (#1701)', async () => {
+    await saveConfig({ ...suiteConfig, multiAgent: { ...suiteConfig.multiAgent, archiveWorkerChats: true } });
+    resetWorkerArchiveForTests();
+    await pair();
+    spawn({ workers: [{ task: 'write the audit' }], caller: { conversationId: PRIME_CHAT } });
+    const bootstrap = await redeem();
+    const conversationId = 'acacacac-7654-4210-8edc-ba9876543210';
+    await request('POST', '/commands/ack', {
+      body: { id: bootstrap.id, status: 'sent', conversationId, agent: 'worker-1' }
+    });
+    finishAgent({ conversationId }, 'the first half is done');
+    // The finished worker's chat was archived in the meantime.
+    queueWorkerArchives([conversationId]);
+    expect((await request('POST', '/worker-archive/next', { body: {} })).body).toEqual({ conversationId });
+    await request('POST', '/worker-archive/result', { body: { conversationId, outcome: 'archived' } });
+
+    wake([{ to: 'worker-1', text: 'now do the second half' }]);
+    // Nothing is opened or typed while the chat is still archived. An extension without
+    // unarchive support reads no chat to archive here.
+    expect((await request('GET', '/status')).body.revival ?? null).toBeNull();
+    expect(opened, 'only the bootstrap opened a page').toHaveLength(1);
+    expect((await request('POST', '/worker-archive/next', { body: {} })).body).toEqual({ conversationId: null, unarchive: conversationId });
+    expect((await request('POST', '/worker-archive/result', { body: { conversationId, outcome: 'unarchived' } })).status).toBe(200);
+
+    const revival = await waitForRevival();
+    expect(revival.conversationId).toBe(conversationId);
   });
 
   it('wakes the same worker again after it has called, well inside the first wake', async () => {
@@ -8876,6 +8931,63 @@ describe('unattributed activity recovery', () => {
   /** The chat a pass was told to repair. */
   const chatOf = (repair: { conversationId: string } | null): string | null => repair?.conversationId ?? null;
 
+  it.each(['assistant-error', 'no-tab', 'compaction'] as const)(
+    'waits before retrying %s recovery after navigation', async reason => {
+      await pair();
+      let conversationId: string;
+
+      if (reason === 'assistant-error') {
+        conversationId = OTHER;
+        await events(conversationId, [openTurn('navigation-error-turn'), {
+          kind: 'chat_error', time: Date.now(), turnId: 'navigation-error-turn',
+          text: 'Connection interrupted', recoverable: true
+        }]);
+      } else if (reason === 'no-tab') {
+        conversationId = WORKER;
+        spawn({ workers: [{ task: 'check navigation recovery' }], caller: { conversationId: PRIME } });
+        const bootstrap = await redeem();
+        await request('POST', '/commands/ack', {
+          body: { id: bootstrap.id, status: 'sent', conversationId, agent: 'worker-1' }
+        });
+        await events(conversationId, [openTurn('navigation-missing-tab-turn')]);
+        await request('POST', '/closed', { body: { conversationId } });
+      } else {
+        conversationId = randomUUID();
+        const session = await createSession({ conversationId });
+        await compactSession(session.id);
+      }
+
+      const first = await maintenance();
+      expect(first).toMatchObject({ conversationId, reason });
+      vi.useFakeTimers();
+      try {
+        const failWhileNavigating = async (repair: { token: string }) => {
+          expect((await request('POST', '/repairs/claim', { body: { token: repair.token } })).body.allowed).toBe(true);
+          await request('GET', `/status?repairFailed=${encodeURIComponent(repair.token)}` +
+            '&repairAction=reloaded&why=changed&detail=navigating');
+        };
+        await failWhileNavigating(first!);
+
+        expect(await maintenance()).toBeNull();
+        await vi.advanceTimersByTimeAsync(NAVIGATION_RECOVERY_COOLDOWN_MS - 1);
+        expect(await maintenance()).toBeNull();
+        await vi.advanceTimersByTimeAsync(1);
+        const retry = await maintenance();
+        expect(retry).toMatchObject({ conversationId, reason });
+        expect(retry!.token).not.toBe(first!.token);
+
+        await failWhileNavigating(retry!);
+        expect(await maintenance()).toBeNull();
+        await vi.advanceTimersByTimeAsync(NAVIGATION_RECOVERY_COOLDOWN_MS - 1);
+        expect(await maintenance()).toBeNull();
+        await vi.advanceTimersByTimeAsync(1);
+        expect(await maintenance()).toMatchObject({ conversationId, reason });
+      } finally {
+        vi.useRealTimers();
+      }
+    }
+  );
+
   it('H2 records the machine reason and immediately offers the existing assistant-error episode', async () => {
     await pair();
     await events(OTHER, [{ kind: 'user_message', time: Date.now(), messageId: 'h2-question', text: 'Trabaja en esta tarea.' }, openTurn('h2-turn')]);
@@ -9298,6 +9410,22 @@ describe('unattributed activity recovery', () => {
    * reloaded three times before it was born. The bootstrap this app typed is the durable
    * boundary: reloads before it are A's and leave the feed, reloads after it stay.
    */
+  it('finds the newest approval row only while it still says waiting', async () => {
+    // A restart while ChatGPT's card waited must take that row over, not add another (VM, 2026-10-20).
+    const { latestWaitingApprovalRow } = await import('../src/main/bridge.js');
+    const { APPROVAL_ANSWERED_TEXT, APPROVAL_WAITING_TEXT } = await import('../src/shared/approval-wait.js');
+    const session = await createSession({ conversationId: 'approval-rows-chat' });
+    expect(await latestWaitingApprovalRow(session.id)).toBeNull();
+    const first = await recordProgress(session.id, 'approval-wait:approval-rows-chat:1', APPROVAL_WAITING_TEXT);
+    await recordProgress(session.id, 'approval-wait:approval-rows-chat:1', APPROVAL_ANSWERED_TEXT, first!);
+    expect(await latestWaitingApprovalRow(session.id)).toBeNull();
+    await recordProgress(session.id, 'browser-repair:between', 'Reloaded chat to recover an interrupted response.');
+    const second = await recordProgress(session.id, 'approval-wait:approval-rows-chat:2', APPROVAL_WAITING_TEXT);
+    expect(await latestWaitingApprovalRow(session.id)).toEqual({ progressId: 'approval-wait:approval-rows-chat:2', anchor: second });
+    await recordProgress(session.id, 'approval-wait:approval-rows-chat:2', APPROVAL_ANSWERED_TEXT, second!);
+    expect(await latestWaitingApprovalRow(session.id)).toBeNull();
+  });
+
   it('keeps an earlier chat’s reload notices out of the chat that resumed it', async () => {
     await pair();
     await events(PRIME, [
@@ -9760,6 +9888,38 @@ describe('unattributed activity recovery', () => {
         vi.useRealTimers();
       }
     }
+  });
+
+  it('tells the page when the running turn answers its conversation\'s first question', async () => {
+    // A chat's first turn can run without ChatGPT showing its question; the page then proves the
+    // question by place, which needs the app's word that the recorded question is the first one.
+    await pair();
+    const chat = randomUUID();
+    await events(chat, [
+      { kind: 'user_message', messageId: 'first-question', parentId: 'root', text: 'Start the long task', time: Date.now(), authoredNow: true },
+      openTurn('first-turn')
+    ]);
+    const first = await request('GET', `/activity?conversationId=${chat}&since=0`);
+    expect(first.body.recordedQuestionId).toBe('first-question');
+    expect(first.body.recordedQuestionFirst).toBe(true);
+
+    await events(chat, [
+      { kind: 'turn_end', turnId: 'first-turn', outcome: 'completed', time: Date.now() + 1 },
+      { kind: 'user_message', messageId: 'second-question', parentId: 'first-answer-id', text: 'Go on', time: Date.now() + 2, authoredNow: true },
+      openTurn('second-turn')
+    ]);
+    const second = await request('GET', `/activity?conversationId=${chat}&since=0`);
+    expect(second.body.recordedQuestionId).toBe('second-question');
+    expect(second.body).not.toHaveProperty('recordedQuestionFirst');
+  });
+
+  it('reports the open turn\'s sent results, and none without an open turn', async () => {
+    await pair();
+    const chat = randomUUID();
+    await events(chat, [{ kind: 'user_message', messageId: 'sent-question', parentId: 'root', text: 'Work on it', time: Date.now(), authoredNow: true }]);
+    expect((await request('GET', `/activity?conversationId=${chat}&since=0`)).body).not.toHaveProperty('sentResults');
+    await events(chat, [openTurn('sent-turn')]);
+    expect((await request('GET', `/activity?conversationId=${chat}&since=0`)).body.sentResults).toEqual({ count: 0, settled: true });
   });
 
   it.each(['normal', 'pro'] as const)('does not continue or reload a %s final observed by another document of the same response', async model => {
