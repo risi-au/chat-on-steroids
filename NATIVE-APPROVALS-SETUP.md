@@ -73,5 +73,33 @@ kept every value; only the new upstream `ui.rotateStopFallback` default and
 true. The bridge is paired with extension 2.1.44. Auto-connect is off in this
 config, so the fresh process starts disconnected until Connect is pressed. The
 official install in `~/.local/opt/Chat On Steroids/` is untouched and remains
-the rollback. The remote refused the push (`403`, no write access to
-`totec448-spec/chat-on-steroids`), so these commits exist only locally.
+the rollback.
+
+## Fork and remotes (2026-10-21)
+
+Upstream is read-only for this account, so the repo now has a fork of its own:
+
+- `origin` — `https://github.com/risi-au/chat-on-steroids.git` (our fork; `main`
+  is pushed here and is the tracking branch)
+- `upstream` — `https://github.com/totec448-spec/chat-on-steroids.git` (official
+  source, read-only)
+
+Forking also brought eight commits that landed upstream after the 2.1.44 tag, so
+`upstream/main` (`3683afc9`) was merged into `main` (`f541cc1d`) on top of the
+verified merge. Only `src/main/bridge.ts` overlapped: the auto-merge kept the
+local `approvalWaitDeps.autoApproveWorkerCard` relay (the config gate and the
+recorded `origin.kind === 'worker'` check) beside upstream's queued-Stop
+changes, and `isCoreApprovalCard` in `approval-wait.ts` is unchanged. `npm run
+typecheck` is clean and `bridge-turn-rotation`, `renderer-state`,
+`approval-wait` and `feature-parity` pass (205 tests). The running app is still
+the 2.1.44 build from `c88ccc40`; these later commits are CI, release-note and
+test changes plus one queued-Stop fix, so they are not built or installed here.
+
+Because the repo is now a fork, the upstream workflows (`codeql`,
+`draft-release-notes`, `issue-version`, `needs-info`, `pr-not-ready`,
+`pr-triage`, `release-checklist`, `similar-issues`, `verify-release`) all gate on
+`github.repository == 'totec448-spec/chat-on-steroids'`, so they do nothing in
+the fork. Pushing here never builds or publishes a release.
+
+Future upstream updates: `git fetch upstream && git merge upstream/main` on
+`main`, keeping the two native-approval commits intact, then push to `origin`.
