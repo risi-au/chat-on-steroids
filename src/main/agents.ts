@@ -13,7 +13,7 @@
  * workers that prove they were still running remain recognized even above the current limit.
  */
 
-import { randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import type { AgentInfo, AgentMessage, AgentState, ReasoningEffort, SwarmState } from '../shared/session.js';
 import { REASONING_EFFORTS, isReasoningEffort } from '../shared/session.js';
 import { getConfig } from './config.js';
@@ -251,6 +251,9 @@ interface Run {
   primeConversationId: string | null;
   /** Inbound HTTP request that created this family before its chat was known. */
   primeRequestId?: string;
+  ownerProofHash?: string;
+  ownerProofScopeId?: string;
+  ownerProofExpiresAt?: number;
   /** Trusted local control API principal; never a claimed ChatGPT conversation. */
   localOwnerId?: string;
   startedAt: number;
@@ -324,6 +327,9 @@ interface DormantRun {
   setupProfileId?: string;
   primeConversationId: string | null;
   primeRequestId?: string;
+  ownerProofHash?: string;
+  ownerProofScopeId?: string;
+  ownerProofExpiresAt?: number;
   localOwnerId?: string;
   startedAt: number;
   parkedAt: number;
@@ -703,10 +709,31 @@ export interface Caller {
   setupProfileId?: string | null;
   /** Optional family selection; ownership is checked independently. */
   runId?: string;
+  /** Explicit bearer credential for a single unattributed family, never a chat identity. */
+  ownerProof?: string;
 }
 
 type Family = Run | DormantRun;
-type FamilyOwner = Pick<Run, 'primeConversationId' | 'primeRequestId' | 'localOwnerId' | 'setupProfileId'>;
+type FamilyOwner = Pick<Run, 'primeConversationId' | 'primeRequestId' | 'localOwnerId' | 'setupProfileId' | 'ownerProofHash' | 'ownerProofScopeId' | 'ownerProofExpiresAt'>;
+
+const OWNER_PROOF_LIFETIME_MS = 7 * 24 * 60 * 60 * 1000;
+const OWNER_PROOF_PATTERN = /^odp37_v1_[A-Za-z0-9_-]{43}$/;
+function hashOwnerProof(runId: string, proof: string): string {
+  return createHash('sha256').update('cos-owner-proof-v1\0').update(runId).update('\0').update(proof).digest('hex');
+}
+function validOwnerProof(caller: Caller, owner: FamilyOwner): boolean {
+  if (!caller.runId || !owner.ownerProofHash || !owner.ownerProofScopeId || !owner.ownerProofExpiresAt || Date.now() >= owner.ownerProofExpiresAt ||
+      !caller.ownerProof || !OWNER_PROOF_PATTERN.test(caller.ownerProof)) return false;
+  if (!/^[a-f0-9]{64}$/.test(owner.ownerProofHash)) return false;
+  return timingSafeEqual(Buffer.from(hashOwnerProof(owner.ownerProofScopeId, caller.ownerProof), 'hex'), Buffer.from(owner.ownerProofHash, 'hex'));
+}
+
+function restoredOwnerProof(saved: { ownerProofHash?: string; ownerProofScopeId?: string; ownerProofExpiresAt?: number }, version: number): Pick<FamilyOwner, 'ownerProofHash' | 'ownerProofScopeId' | 'ownerProofExpiresAt'> {
+  if (version < 8 || !saved.ownerProofHash || !/^[a-f0-9]{64}$/.test(saved.ownerProofHash) ||
+      !saved.ownerProofScopeId || !/^[0-9a-f-]{36}$/.test(saved.ownerProofScopeId) ||
+      !Number.isSafeInteger(saved.ownerProofExpiresAt) || saved.ownerProofExpiresAt! <= Date.now()) return {};
+  return { ownerProofHash: saved.ownerProofHash, ownerProofScopeId: saved.ownerProofScopeId, ownerProofExpiresAt: saved.ownerProofExpiresAt };
+}
 
 /** Parked fleets keep their last incarnation, even when several have the same prime. */
 function familyKey(owner: Family): string {
@@ -793,13 +820,16 @@ function validLocalOwner(value: unknown): value is string {
 }
 
 function ownsPrime(caller: Caller, owner: FamilyOwner): boolean {
+  // A bearer-issued family retains its own explicit principal even if late page evidence
+  // names a conversation. Never attach/transfer it merely on the request-id join.
+  if (owner.ownerProofHash) return validOwnerProof(caller, owner);
   if (owner.localOwnerId) return hasCallerIdentity(caller) && caller.localOwnerId === owner.localOwnerId;
   if (caller.localOwnerId) return false;
   // Once attached, only the current frontend owns the fleet. In particular, an old request
   // from A cannot recover prime authority after the durable session has moved to B.
   if (owner.primeConversationId) return caller.conversationId === owner.primeConversationId;
-  return Boolean(owner.primeRequestId && !requestCorrelation(owner.primeRequestId) &&
-    !caller.conversationId && getConfig().multiAgent.allowUnattributedCalls && caller.requestId === owner.primeRequestId);
+  // Historical unattributed families had no durable per-caller proof. Fail closed.
+  return false;
 }
 
 function belongsToFamilyIdentity(caller: Caller, owner: Family): boolean {
@@ -835,8 +865,8 @@ function familiesForCaller(input: Caller, includeUnpublished = false): Family[] 
     // Proof can arrive during a staged spawn's disk barrier. Admission must still see that
     // exact in-flight request instead of creating a second fleet while its first is hidden.
     const stagedRequest = includeUnpublished && unpublished && owner.primeRequestId &&
-      (owner.primeRequestId === caller.requestId || Boolean(caller.conversationId &&
-        requestCorrelation(owner.primeRequestId)?.conversationId === caller.conversationId));
+      !owner.ownerProofHash && (owner.primeRequestId === caller.requestId || Boolean(caller.conversationId &&
+        requestCorrelation(owner.primeRequestId)?.conversationId === caller.conversationId)));
     return setupProfileMatches(caller, owner) && (stagedRequest || belongsToFamilyIdentity(caller, owner));
   });
 }
@@ -873,6 +903,7 @@ export function reconcileAgentRequestOwners(): Promise<void> {
       let attached = false;
       for (const owner of allFamilies()) {
         if (owner.primeConversationId || !owner.primeRequestId || unpublishedRuns.has(owner as Run)) continue;
+        if (owner.ownerProofHash || !owner.localOwnerId && !owner.ownerProofHash) continue;
         const proof = requestCorrelation(owner.primeRequestId);
         if (!proof) continue;
         const session = await getSession(proof.sessionId);
@@ -1037,6 +1068,9 @@ function reactivateDormantRun(dormant: DormantRun): Run | null {
     setupProfileId: dormant.setupProfileId,
     primeConversationId: dormant.primeConversationId,
     primeRequestId: dormant.primeRequestId,
+    ownerProofHash: dormant.ownerProofHash,
+    ownerProofScopeId: dormant.ownerProofScopeId,
+    ownerProofExpiresAt: dormant.ownerProofExpiresAt,
     localOwnerId: dormant.localOwnerId,
     // The browser-command fence gets a new incarnation id, but this is still the same prime's
     // worker history. Keep the original history start instead of pretending the workers were
@@ -1610,6 +1644,9 @@ function parkRun(run: Run | null, reason: string): boolean {
     setupProfileId: current.setupProfileId,
     primeConversationId: current.primeConversationId,
     primeRequestId: current.primeRequestId,
+    ownerProofHash: current.ownerProofHash,
+    ownerProofScopeId: current.ownerProofScopeId,
+    ownerProofExpiresAt: current.ownerProofExpiresAt,
     localOwnerId: current.localOwnerId,
     startedAt: current.startedAt,
     parkedAt: Date.now(),
@@ -1707,6 +1744,8 @@ export interface SpawnResult {
   /** True on the call that established the run, so the caller can say what happened. */
   becamePrime: boolean;
   runId: string;
+  /** Returned once to the initial unattributed caller. Never persist or log this value. */
+  ownerProof?: string;
   /** App defaults from Settings that this account does not offer, and what was used instead. */
   defaultNotes?: string[];
 }
@@ -2141,6 +2180,7 @@ export function spawn(input: SpawnInput, options: SpawnOptions = {}): SpawnResul
   const becamePrime = run === null;
   let resumedDormant: DormantRun | null = null;
   let createdFreshRun = false;
+  let issuedOwnerProof: string | undefined;
   if (!run) {
     resumedDormant = dormantRunForCaller(input.caller);
     if (resumedDormant) {
@@ -2155,12 +2195,15 @@ export function spawn(input: SpawnInput, options: SpawnOptions = {}): SpawnResul
       // must inherit the continuation owner's existing transfer intent.
       // Otherwise the later session commit rightly refuses to strand workers in A.
       const pendingHandoff = conversationId ? continuationForSourceConversation(conversationId) : null;
+      const newRunId = randomUUID();
+      if (!conversationId && !input.caller.localOwnerId) issuedOwnerProof = `odp37_v1_${randomBytes(32).toString('base64url')}`;
       run = {
         // This is an incarnation key, not a display id. Browser bootstrap commands persist
         // independently and quote it so a late `worker-1` from run A can never bind `worker-1`
         // in run B. Truncating a UUID to eight hex characters made that safety boundary only
         // 32 bits wide; keep the full UUID and shorten it only where a UI chooses to render it.
-        runId: randomUUID(),
+        runId: newRunId,
+        ...(issuedOwnerProof ? { ownerProofHash: hashOwnerProof(newRunId, issuedOwnerProof), ownerProofScopeId: newRunId, ownerProofExpiresAt: Date.now() + OWNER_PROOF_LIFETIME_MS } : {}),
         setupProfileId: setupProfileId(input.caller.setupProfileId),
         primeConversationId: conversationId,
         primeRequestId: conversationId ? undefined : input.caller.requestId!,
@@ -2266,7 +2309,7 @@ export function spawn(input: SpawnInput, options: SpawnOptions = {}): SpawnResul
   );
   changed();
   if (!options.deferDelivery) requestWorkerBootstraps(created.map((agent) => agent.id), activeRun.runId);
-  return { created, becamePrime, runId: activeRun.runId, ...(defaultNotes.size ? { defaultNotes: [...defaultNotes] } : {}) };
+  return { created, becamePrime, runId: activeRun.runId, ...(createdFreshRun && issuedOwnerProof ? { ownerProof: issuedOwnerProof } : {}), ...(defaultNotes.size ? { defaultNotes: [...defaultNotes] } : {}) };
 }
 
 /**
@@ -5154,6 +5197,9 @@ interface DormantRunSnapshot {
   setupProfileId?: string;
   primeConversationId: string | null;
   primeRequestId?: string;
+  ownerProofHash?: string;
+  ownerProofScopeId?: string;
+  ownerProofExpiresAt?: number;
   localOwnerId?: string;
   startedAt: number;
   parkedAt: number;
@@ -5169,8 +5215,8 @@ export interface SwarmSnapshot {
    * before 4 are discarded because their worker identity depended on routing codes this build
    * cannot honour.
    */
-  version: 4 | 5 | 6 | 7;
-  activeRuns?: Array<{ runId: string; formerRunIds?: string[]; setupProfileId?: string; primeConversationId: string | null; primeRequestId?: string; localOwnerId?: string; startedAt: number; agents: SerializedAgent[] }>;
+  version: 4 | 5 | 6 | 7 | 8;
+  activeRuns?: Array<{ runId: string; formerRunIds?: string[]; setupProfileId?: string; primeConversationId: string | null; primeRequestId?: string; ownerProofHash?: string; ownerProofScopeId?: string; ownerProofExpiresAt?: number; localOwnerId?: string; startedAt: number; agents: SerializedAgent[] }>;
   savedAt: number;
   /** Top-level fields are the active incarnation; all are null/empty while only history remains. */
   runId: string | null;
@@ -5269,7 +5315,7 @@ const archivedAssignments = new Map<string, string>();
  * pruning. Callers do not wait on it, so it never rejects: a malformed entry is skipped.
  */
 export async function archiveWorkerAssignments(snapshot: SwarmSnapshot | null): Promise<void> {
-  if (!snapshot || ![4, 5, 6, 7].includes(snapshot.version) || !Number.isFinite(snapshot.savedAt)) return;
+  if (!snapshot || ![4, 5, 6, 7, 8].includes(snapshot.version) || !Number.isFinite(snapshot.savedAt)) return;
   const groups = snapshot.version >= 6 && Array.isArray(snapshot.activeRuns)
     ? snapshot.activeRuns : [{ agents: snapshot.agents }];
   const workers = [...groups, ...(Array.isArray(snapshot.dormantRuns) ? snapshot.dormantRuns : [])]
@@ -5329,19 +5375,21 @@ function buildSwarmSnapshot(includeUnpublished: boolean): SwarmSnapshot | null {
   // Legacy top-level projection is deliberately empty with multiple owners. Version 6 readers
   // use activeRuns exclusively; retaining a sole-owner projection keeps older diagnostic readers useful.
   const sole = active.length === 1 ? active[0] : null;
-  const snapshot: SwarmSnapshot = { version: 7, savedAt: Date.now(), runId: sole?.runId ?? null,
+  const snapshot: SwarmSnapshot = { version: 8, savedAt: Date.now(), runId: sole?.runId ?? null,
     ...(sole?.setupProfileId ? { setupProfileId: sole.setupProfileId } : {}),
     primeConversationId: sole?.primeConversationId ?? null, startedAt: sole?.startedAt ?? null,
     agents: sole ? serializeAgents(sole.agents, includeUnpublished) : [],
     activeRuns: active.map(r => ({ runId: r.runId, ...(r.formerRunIds?.length ? { formerRunIds: r.formerRunIds } : {}),
       ...(r.setupProfileId ? { setupProfileId: r.setupProfileId } : {}), primeConversationId: r.primeConversationId,
       primeRequestId: r.primeRequestId,
+      ownerProofHash: r.ownerProofHash, ownerProofScopeId: r.ownerProofScopeId, ownerProofExpiresAt: r.ownerProofExpiresAt,
       localOwnerId: r.localOwnerId,
       startedAt: r.startedAt, agents: serializeAgents(r.agents, includeUnpublished) })),
     ...(retiredManagedWorkerConversations.size ? { managedRetiredConversations: [...retiredManagedWorkerConversations] } : {}),
     dormantRuns: dormant.map(h => ({ ...(h.formerRunIds?.length ? { formerRunIds: h.formerRunIds } : {}),
       ...(h.setupProfileId ? { setupProfileId: h.setupProfileId } : {}), primeConversationId: h.primeConversationId, startedAt: h.startedAt,
       primeRequestId: h.primeRequestId,
+      ownerProofHash: h.ownerProofHash, ownerProofScopeId: h.ownerProofScopeId, ownerProofExpiresAt: h.ownerProofExpiresAt,
       localOwnerId: h.localOwnerId,
       parkedAt: h.parkedAt, agents: serializeAgents(h.agents, includeUnpublished) })) };
   const offers = collectManagedWorktreeCleanupOffers([
@@ -5432,7 +5480,7 @@ export function restoreSwarm(snapshot: SwarmSnapshot | null): void {
   persistedCriticalRevision = 0;
   criticalPersistFlight = null;
   if (!snapshot || !Array.isArray(snapshot.agents)) return;
-  if (snapshot.version !== 4 && snapshot.version !== 5 && snapshot.version !== 6 && snapshot.version !== 7) {
+  if (snapshot.version !== 4 && snapshot.version !== 5 && snapshot.version !== 6 && snapshot.version !== 7 && snapshot.version !== 8) {
     logInfo('multi-agent: discarded a run saved by an older build — spawn again to start a new one.');
     return;
   }
@@ -5505,7 +5553,7 @@ export function restoreSwarm(snapshot: SwarmSnapshot | null): void {
   if (snapshot.version >= 5 && Array.isArray(snapshot.dormantRuns)) {
     for (const saved of snapshot.dormantRuns) {
       if (!saved || (!(typeof saved.primeConversationId === 'string' && saved.primeConversationId) &&
-        !(snapshot.version === 7 && saved.primeConversationId === null && (validRequestOwner(saved.primeRequestId) || validLocalOwner(saved.localOwnerId)))) || !Array.isArray(saved.agents)) {
+        !(snapshot.version >= 7 && saved.primeConversationId === null && (validRequestOwner(saved.primeRequestId) || validLocalOwner(saved.localOwnerId)))) || !Array.isArray(saved.agents)) {
         repaired = true;
         continue;
       }
@@ -5523,7 +5571,7 @@ export function restoreSwarm(snapshot: SwarmSnapshot | null): void {
         ? previousRunId : randomUUID();
       const restoredSetupProfileId = setupProfileId(saved.setupProfileId);
       if (saved.setupProfileId !== undefined && !restoredSetupProfileId) repaired = true;
-      if (dormantRuns.has(runId) || !acceptOwner(saved.primeConversationId, restored.agents, snapshot.version === 7 ? saved.primeRequestId : undefined, saved.localOwnerId)) {
+      if (dormantRuns.has(runId) || !acceptOwner(saved.primeConversationId, restored.agents, snapshot.version >= 7 ? saved.primeRequestId : undefined, saved.localOwnerId)) {
         repaired = true;
         logWarn(`multi-agent: discarded conflicting dormant history for ${saved.primeConversationId}`);
         continue;
@@ -5537,7 +5585,8 @@ export function restoreSwarm(snapshot: SwarmSnapshot | null): void {
         formerRunIds: savedFormerRunIds(saved.formerRunIds, runId),
         ...(restoredSetupProfileId ? { setupProfileId: restoredSetupProfileId } : {}),
         primeConversationId: saved.primeConversationId,
-        primeRequestId: snapshot.version === 7 ? saved.primeRequestId : undefined,
+        primeRequestId: snapshot.version >= 7 ? saved.primeRequestId : undefined,
+        ...restoredOwnerProof(saved, snapshot.version),
         localOwnerId: saved.localOwnerId,
         startedAt: Number.isFinite(saved.startedAt) ? saved.startedAt : snapshot.savedAt || Date.now(),
         parkedAt: Number.isFinite(saved.parkedAt) ? saved.parkedAt : snapshot.savedAt || Date.now(),
@@ -5554,7 +5603,7 @@ export function restoreSwarm(snapshot: SwarmSnapshot | null): void {
     if (!saved) { repaired = true; continue; }
     const hasActive =
       ((typeof saved.primeConversationId === 'string' && Boolean(saved.primeConversationId)) ||
-        (snapshot.version === 7 && saved.primeConversationId === null && (('primeRequestId' in saved && validRequestOwner(saved.primeRequestId)) || validLocalOwner(saved.localOwnerId)))) &&
+        (snapshot.version >= 7 && saved.primeConversationId === null && (('primeRequestId' in saved && validRequestOwner(saved.primeRequestId)) || validLocalOwner(saved.localOwnerId)))) &&
       typeof saved.runId === 'string' &&
       Boolean(saved.runId) &&
       Array.isArray(saved.agents);
@@ -5564,7 +5613,7 @@ export function restoreSwarm(snapshot: SwarmSnapshot | null): void {
     }
     if (hasActive) {
       const primeConversationId = saved.primeConversationId;
-      const primeRequestId = snapshot.version === 7 && 'primeRequestId' in saved && validRequestOwner(saved.primeRequestId)
+      const primeRequestId = snapshot.version >= 7 && 'primeRequestId' in saved && validRequestOwner(saved.primeRequestId)
         ? saved.primeRequestId : undefined;
       const restored = deserializeAgents(saved.agents, snapshot.savedAt);
       repaired ||= restored.repaired;
@@ -5590,6 +5639,7 @@ export function restoreSwarm(snapshot: SwarmSnapshot | null): void {
           ...(restoredSetupProfileId ? { setupProfileId: restoredSetupProfileId } : {}),
           primeConversationId,
           primeRequestId,
+          ...restoredOwnerProof(saved, snapshot.version),
           localOwnerId: saved.localOwnerId,
           startedAt: Number.isFinite(saved.startedAt) ? (saved.startedAt as number) : snapshot.savedAt || Date.now(),
           agents: restored.agents,

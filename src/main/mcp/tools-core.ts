@@ -1262,7 +1262,8 @@ function registerAgentsTool(reg: SurfaceRegistrar): void {
         'status: your active, sleeping/revivable and terminal workers, incl. parked families, and pending reports; one call before a final answer collects them. Repeated polling adds nothing. finish: records the report, then normally sleeps.',
       inputSchema: z.object({
         action: z.enum(['spawn', 'message', 'status', 'finish']).describe('What to do.'),
-        run_id: z.string().uuid().optional().describe('Select your returned worker family when status lists several; never grants another caller’s workers.'),
+        run_id: z.string().uuid().optional().describe('Select a worker family; never grants access by itself.'),
+        owner_proof: z.string().regex(/^odp37_v1_[A-Za-z0-9_-]{43}$/).optional().describe('Secret returned once on an unattributed spawn; echo with run_id to access only that family. Losing it cannot be recovered.'),
         context: z
           .string()
           .max(4000)
@@ -1372,14 +1373,14 @@ function registerAgentsTool(reg: SurfaceRegistrar): void {
           // Reserve under exact chat proof or the permitted transport request, atomically.
           // The request remains the reachable prime before browser attachment; later proof
           // changes its frontend projection without recreating workers or replaying spawn.
-          const spawnCaller = await callerNow(startedAt, { exact: true, runId: input.run_id });
+          const spawnCaller = await callerNow(startedAt, { exact: true, runId: input.run_id, ownerProof: input.owner_proof });
           // A stale managed worker whose family and ordinary retired-worker TTL have expired
           // must not bootstrap a new prime family to regain local mutation authority. Session
           // origin and durable managed tombstones are denial-only, not adoption credentials.
           if (await managedWorkerIsolationRequired(spawnCaller) && !managedWorkerAllocationIdentity(spawnCaller)) {
             return fail('WORKTREE_OWNER_UNAVAILABLE: a retired worker cannot create a prime run after its isolated checkout owner was lost.');
           }
-          const { created, becamePrime, runId, defaultNotes, isolationNotes } = await spawnAgentWorkers({
+          const { created, becamePrime, runId, defaultNotes, isolationNotes, ownerProof } = await spawnAgentWorkers({
             workers: input.workers,
             context: input.context ?? null,
             caller: spawnCaller
@@ -1408,6 +1409,7 @@ function registerAgentsTool(reg: SurfaceRegistrar): void {
                   (sleeping.length > 0
                     ? `${sleeping.map((worker) => worker.id).join(', ')} already finished that earlier piece and is sleeping in its existing chat; wake it with action=message instead of spawning a duplicate. `
                     : '') +
+                  (ownerProof ? `OWNER PROOF (shown once): ${ownerProof}. For EVERY subsequent agents call to this run, send run_id=${runId} and owner_proof=${ownerProof}. The proof is a bearer secret: anyone who receives it can access this family until expiry; if lost, no automatic recovery exists. ` : '') +
                   'Carry on with your own work — results and ' +
                   'messages arrive at the end of later tool results, so there is nothing to wait for and never anything ' +
                   'to poll. A short correction with action=message while a worker is still going is far cheaper than ' +
@@ -1417,6 +1419,7 @@ function registerAgentsTool(reg: SurfaceRegistrar): void {
             structuredContent: {
               action: 'spawn',
               run_id: runId,
+              ...(ownerProof ? { owner_proof: ownerProof } : {}),
               self: PRIME_ID,
               became_prime: becamePrime,
               workers: created.map((info) => ({ id: info.id, label: info.label, state: info.state, model: info.model, reasoning_effort: info.reasoningEffort }))
@@ -1435,7 +1438,7 @@ function registerAgentsTool(reg: SurfaceRegistrar): void {
             if (!input.text) {
               return fail('agents action=message with target_run_id requires text.');
             }
-            const caller = await callerNow(startedAt, { runId: input.run_id, member: true });
+            const caller = await callerNow(startedAt, { runId: input.run_id, member: true, ownerProof: input.owner_proof });
             const staged = stagePrimeMessage(caller, input.target_run_id, input.text);
             await acceptAgentMutation(staged,
               'The prime message could not cross its durable acceptance barrier. Nothing was queued; retry the same message request.',
@@ -1470,7 +1473,7 @@ function registerAgentsTool(reg: SurfaceRegistrar): void {
           if (items.length === 0) return fail('agents action=message requires to and text, or a messages array.');
           // Before any slot is reserved: a sleeping worker whose chat has since crossed the
           // context ceiling is not revivable, and this is the call that would otherwise wake it.
-          const caller = await callerNow(startedAt, { runId: input.run_id, member: true });
+          const caller = await callerNow(startedAt, { runId: input.run_id, member: true, ownerProof: input.owner_proof });
           await measureSleepingWorkers(caller);
           // One call, one identity resolution, one all-or-nothing delivery: a prime
           // redirecting its whole run cannot end up with two of its three messages sent.
@@ -1512,7 +1515,7 @@ function registerAgentsTool(reg: SurfaceRegistrar): void {
               'agents action=finish requires result: the report the prime reads in your place — what you changed, what you verified and what is left. Send it as result and call finish again.'
             );
           }
-          const staged = stageFinishAgent(await callerNow(startedAt, { runId: input.run_id, member: true }), input.result);
+          const staged = stageFinishAgent(await callerNow(startedAt, { runId: input.run_id, member: true, ownerProof: input.owner_proof }), input.result);
           if (!staged.repeat) {
             await acceptAgentMutation(staged,
               'The worker finish could not cross its durable acceptance barrier. Nothing was published; retry the same finish result.');
@@ -1543,7 +1546,7 @@ function registerAgentsTool(reg: SurfaceRegistrar): void {
 
         // Status describes only this exact caller's family. No family is a normal empty
         // result, independent of whether another prime has workers; discovery grants no role.
-        const caller = await callerNow(startedAt, { runId: input.run_id });
+        const caller = await callerNow(startedAt, { runId: input.run_id, ownerProof: input.owner_proof });
         await measureSleepingWorkers(caller);
         const status = statusForCaller(caller);
         const me = status.self;
@@ -1665,14 +1668,14 @@ function registerAgentsTool(reg: SurfaceRegistrar): void {
  * The proven identity is then adopted for the rest of the call, so this result is recorded
  * against the right agent and carries the right inbox.
  */
-async function callerNow(startedAt: number, options: { exact?: boolean; runId?: string; member?: boolean } = {}): Promise<Caller> {
+async function callerNow(startedAt: number, options: { exact?: boolean; runId?: string; member?: boolean; ownerProof?: string } = {}): Promise<Caller> {
   const base = currentCaller();
   // `exact` marks the one action that binds a run: spawn. It is the call whose refusal the
   // model cannot absorb, so it gets the longer ceiling; every other `agents` action can be
   // declined and asked again on the next tool call.
   const window = base.requestId ? (options.exact ? SPAWN_EVIDENCE_MS : IDENTITY_EVIDENCE_MS) : PRIME_EVIDENCE_MS;
   const allowRequest = Boolean(base.requestId && (currentCall()?.allowUnattributed ?? getConfig().multiAgent.allowUnattributedCalls));
-  const requestOwnsTarget = !options.member || agentFamiliesForCaller(base).length > 0;
+  const requestOwnsTarget = !options.member || Boolean(options.ownerProof && options.runId) || agentFamiliesForCaller(base).length > 0;
   const resolved =
     base.conversationId ??
     requestCorrelation(base.requestId)?.conversationId ??
@@ -1685,7 +1688,8 @@ async function callerNow(startedAt: number, options: { exact?: boolean; runId?: 
   const caller: Caller = {
     ...base,
     conversationId: resolved,
-    runId: options.runId
+    runId: options.runId,
+    ownerProof: options.ownerProof
   };
   const call = currentCall();
   if (call) call.caller.runId = options.runId;

@@ -1107,6 +1107,7 @@ function redactArgs(tool: string, args: unknown): unknown {
   const copy: Record<string, unknown> = { ...(args as Record<string, unknown>) };
   // Native file values carry download credentials, not reproducible tool input.
   // Keep the destination and result for recovery without persisting the URL or file token.
+  if (tool === 'agents' && Object.hasOwn(copy, 'owner_proof')) copy['owner_proof'] = '<owner proof redacted>';
   if (tool === 'download_artifact' && Object.hasOwn(copy, 'file')) copy['file'] = '<native file credentials not stored>';
   if (copy['env'] && typeof copy['env'] === 'object') {
     copy['env'] = Object.fromEntries(Object.keys(copy['env'] as object).map((key) => [key, '***']));
@@ -1136,6 +1137,7 @@ function redactArgs(tool: string, args: unknown): unknown {
 
 function redactResult(tool: string, text: string): string {
   text = redactCredentialText(text);
+  if (tool === 'agents') text = text.replace(/odp37_v1_[A-Za-z0-9_-]{43}/g, '<owner proof redacted>');
   if (tool === 'read_clipboard') return '<clipboard text not stored>';
   // The other half of the clipboard rule: what was read comes back as its own line in
   // computer's reply, and only that line is dropped, so the rest of the result — which

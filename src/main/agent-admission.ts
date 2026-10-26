@@ -205,6 +205,6 @@ export async function spawnAgentWorkers(
       if (!admittedLeases.some(lease => lease.agentId === agentId)) setWorkspaceFor(`agent:${staged.runId}:${agentId}`, admission.workspace);
     }
   }
-  const { created, becamePrime, runId, defaultNotes } = staged;
-  return { created, becamePrime, runId, defaultNotes, isolationNotes };
+  const { created, becamePrime, runId, defaultNotes, ownerProof } = staged;
+  return { created, becamePrime, runId, defaultNotes, ownerProof, isolationNotes };
 }
